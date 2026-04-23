@@ -9,10 +9,10 @@ It is a **field-maintainable toolkit**: simple, readable utilities designed to s
 
 Tools may be written in any language (Python, Bash, PowerShell, etc.) as long as they adhere to the core philosophy:
 
-> **Clarity > Cleverness**
-> **Maintainability > Language Purity**
-> **Readability > Performance (until performance matters)**
-
+> **Principles:**
+> - **Clarity > Cleverness**
+> - **Maintainability > Language Purity**
+> - **Readability > Performance (until performance matters)**
 ---
 
 ## Philosophy
