@@ -1,0 +1,19 @@
+# fieldkit — ignored paths
+
+# Local configuration. Never commit this; copy from example.env.
+.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python virtual environments (not used by fieldkit tools, but easy to
+# create by accident — keep them out of the repo regardless)
+.venv/
+venv/
+
+# Generated disc artifacts and build scratch directories
+*.iso
+build/
+fieldkit-*-build/
