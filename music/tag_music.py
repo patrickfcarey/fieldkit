@@ -57,8 +57,6 @@ MIN_PYTHON = (3, 11)
 AUDIO_EXTS = {".mp3", ".flac", ".m4a"}
 USER_AGENT = "fieldkit-tagger/0.1 ( https://github.com/patrickfcarey )"
 
-# Minimum seconds between requests to each host (politeness / rate limits).
-THROTTLE = {"musicbrainz.org": 1.1, "api.discogs.com": 1.5, "coverartarchive.org": 0.0}
 _last_hit: dict[str, float] = {}
 
 
@@ -105,6 +103,16 @@ def _dotenv_value(key):
 # otherwise the repository .env file is consulted.
 DISCOGS_TOKEN = (os.environ.get("FIELDKIT_DISCOGS_TOKEN", "").strip()
                  or _dotenv_value("FIELDKIT_DISCOGS_TOKEN").strip())
+
+# Minimum seconds between requests to each host (politeness / rate limits).
+# Discogs allows 25 req/min unauthenticated (2.4 s/req) and 60 req/min with
+# a token (1.0 s/req). Use the token limit when authenticated, conservative
+# unauthenticated limit otherwise so we never trigger a 429.
+THROTTLE = {
+    "musicbrainz.org": 1.1,
+    "api.discogs.com": 1.1 if DISCOGS_TOKEN else 2.5,
+    "coverartarchive.org": 0.0,
+}
 
 
 def _throttle(host):
