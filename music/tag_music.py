@@ -150,7 +150,11 @@ def http_get_json(url):
 def ffprobe(path):
     cmd = ["ffprobe", "-v", "error", "-print_format", "json",
            "-show_format", "-show_streams", str(path)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("  ! ffprobe timed out: {0}".format(path), file=sys.stderr)
+        return None
     if result.returncode != 0:
         return None
     try:
