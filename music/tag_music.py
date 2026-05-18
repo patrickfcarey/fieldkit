@@ -251,12 +251,12 @@ def mb_release_group(artist, album, is_va=False):
 
 
 def discogs_lookup(artist, album, is_va=False):
-    """Return (genre, cover_url) from Discogs; each may be None.
+    """Return (genre, cover_url, master_id) from Discogs; each may be None.
 
-    genre comes from the moderated "style" field. cover_url is the
-    first usable release image, a fallback for when the Cover Art
-    Archive has nothing. For various-artists albums the artist
-    constraint is dropped.
+    genre comes from the moderated "style" field. cover_url is a direct
+    image URL, present only for token-authenticated requests. master_id
+    enables the token-free cover route via discogs_master_image(). For
+    various-artists albums the artist constraint is dropped.
     """
     params = {"release_title": album, "type": "release", "per_page": 8}
     if not is_va:
@@ -267,9 +267,9 @@ def discogs_lookup(artist, album, is_va=False):
         params)
     data = http_get_json(url)
     if not data:
-        return None, None
+        return None, None, None
     styles, genres = Counter(), Counter()
-    cover_url = None
+    cover_url, master_id = None, None
     for result in (data.get("results") or []):
         for style in (result.get("style") or []):
             styles[style] += 1
@@ -279,12 +279,32 @@ def discogs_lookup(artist, album, is_va=False):
             image = result.get("cover_image") or ""
             if image.startswith("http") and "spacer" not in image:
                 cover_url = image
+        if master_id is None and result.get("master_id"):
+            master_id = result["master_id"]
     genre = None
     if styles:
         genre = styles.most_common(1)[0][0]
     elif genres:
         genre = genres.most_common(1)[0][0]
-    return genre, cover_url
+    return genre, cover_url, master_id
+
+
+def discogs_master_image(master_id):
+    """Return the primary cover-image URL for a Discogs master, or None.
+
+    The Discogs search API omits image URLs unless the request is
+    token-authenticated; the masters endpoint serves them either way,
+    so this is the token-free route to a Discogs cover.
+    """
+    data = http_get_json(
+        "https://api.discogs.com/masters/{0}".format(master_id))
+    if not data:
+        return None
+    images = data.get("images") or []
+    for image in images:
+        if image.get("type") == "primary" and image.get("uri"):
+            return image["uri"]
+    return images[0].get("uri") if images else None
 
 
 def download_image(url, dest):
@@ -301,10 +321,33 @@ def download_image(url, dest):
 
 
 def fetch_cover(release_group_id, dest):
-    """Download the Cover Art Archive front cover. Return True on success."""
-    url = "https://coverartarchive.org/release-group/{0}/front".format(
+    """Download the Cover Art Archive front cover. Return True on success.
+
+    Prefers the 1200px thumbnail: the full-size original can be tens of
+    megabytes, wasteful to embed and large enough to overflow FLAC's
+    16 MiB picture-block limit. Falls back to the original if absent.
+    """
+    base = "https://coverartarchive.org/release-group/{0}".format(
         release_group_id)
-    return download_image(url, dest)
+    return (download_image(base + "/front-1200", dest)
+            or download_image(base + "/front", dest))
+
+
+def normalize_cover(path):
+    """Re-encode a cover to a bounded JPEG that is safe to embed.
+
+    FLAC stores a picture in a metadata block capped at 16 MiB; an
+    oversized image is silently dropped on embed (and bloats every
+    track regardless). Downscale to at most 1000px wide and re-encode.
+    Returns the normalized file, or the original if ffmpeg fails.
+    """
+    out = path.with_name(path.stem + ".norm.jpg")
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(path),
+           "-vf", "scale='min(1000,iw)':-1", "-q:v", "3", str(out)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0 and out.is_file() and out.stat().st_size > 1024:
+        return out
+    return path
 
 
 # --- applying changes -------------------------------------------------------
@@ -435,9 +478,10 @@ def process_album(record, work_dir, dry_run):
     rg_id, mb_year = (None, None)
     if need_mb:
         rg_id, mb_year = mb_release_group(artist, lookup_album, is_va)
-    genre, discogs_cover = (None, None)
+    genre, discogs_cover, discogs_master = (None, None, None)
     if needs_genre or needs_art:
-        genre, discogs_cover = discogs_lookup(artist, lookup_album, is_va)
+        genre, discogs_cover, discogs_master = discogs_lookup(
+            artist, lookup_album, is_va)
     if not needs_genre:
         genre = None
 
@@ -447,11 +491,16 @@ def process_album(record, work_dir, dry_run):
             caa = work_dir / (rg_id + ".jpg")
             if fetch_cover(rg_id, caa):
                 cover, cover_src = caa, "caa"
-        if cover is None and discogs_cover:
-            dgc = work_dir / "dg_{0}.jpg".format(
-                abs(hash(discogs_cover)) % 10 ** 10)
-            if download_image(discogs_cover, dgc):
-                cover, cover_src = dgc, "discogs"
+        if cover is None:
+            url = discogs_cover
+            if url is None and discogs_master:
+                url = discogs_master_image(discogs_master)
+            if url:
+                dgc = work_dir / "dg_{0}.jpg".format(abs(hash(url)) % 10 ** 10)
+                if download_image(url, dgc):
+                    cover, cover_src = dgc, "discogs"
+        if cover is not None:
+            cover = normalize_cover(cover)
 
     print("ALBUM  {0}".format(label))
     print("  lookup: genre={0} cover={1} mb-year={2} ({3} tracks)".format(
