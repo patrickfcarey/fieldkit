@@ -190,9 +190,6 @@ def build_preview(root):
     canon_groups = {}      # normalized key -> {"label": best show label, "folders": [...]}
     total_renames = 0
 
-    def norm_key(show):
-        return re.sub(r"\s*\((?:19|20)\d{2}\)$", "", show).casefold().strip()
-
     for folder in shows:
         eps = list(collect_episodes(os.path.join(root, folder)))
         status, show, year = classify(folder, eps)
@@ -284,21 +281,139 @@ def build_preview(root):
     return "\n".join(out) + "\n"
 
 
+def norm_key(show):
+    return re.sub(r"\s*\((?:19|20)\d{2}\)$", "", show).casefold().strip()
+
+
+def apply_mappable(root, log_dir, date):
+    """Apply renames for MAPPABLE shows that are NOT part of a merge group. Reversible.
+
+    Per show: rename the folder to the clean label, move each parsed episode into
+    'Season NN/Show - sNNeNN - Title.ext', leave unparsed files in place, prune emptied
+    subfolders. Skips merge-group members, flagged shows, and any name collision.
+    """
+    folders = sorted(
+        (e for e in os.listdir(root)
+         if os.path.isdir(os.path.join(root, e)) and not e.startswith(".")),
+        key=str.lower,
+    )
+    groups = {}
+    info = []
+    for folder in folders:
+        eps = list(collect_episodes(os.path.join(root, folder)))
+        status, show, year = classify(folder, eps)
+        info.append((folder, show, status, eps))
+        groups.setdefault(norm_key(show), []).append(folder)
+    merge_keys = {k for k, v in groups.items() if len(v) > 1}
+
+    rel = lambda p: os.path.relpath(p, root)
+    undo = []          # appended in forward order; written REVERSED
+    log = []
+    moved = 0
+    applied = 0
+    skipped = {"flagged": 0, "merge": 0, "collision": 0, "noop": 0}
+
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"normalize-episodes-{date}.log")
+    undo_path = os.path.join(log_dir, f"undo-episodes-{date}.sh")
+
+    def flush_undo():
+        # Rewrite the undo script after every change so a partial run is always reversible.
+        # Best-effort (no 'set -e'): tolerates paths a partial run never created.
+        with open(undo_path, "w", encoding="utf-8") as fh:
+            fh.write("#!/usr/bin/env bash\n# Reverse normalize_episodes.py --apply (best-effort).\n")
+            fh.write(f'cd "{root}"\n')
+            fh.write("\n".join(reversed(undo)) + "\n")
+        os.chmod(undo_path, 0o755)
+
+    def record(line):
+        undo.append(line)
+        flush_undo()
+
+    flush_undo()  # create the undo file up front, even before the first move
+
+    for folder, show, status, eps in info:
+        if status != "mappable":
+            skipped["flagged"] += 1
+            continue
+        if norm_key(show) in merge_keys:
+            skipped["merge"] += 1
+            log.append(f"SKIP merge-group: {folder}")
+            continue
+        cur_dir = os.path.join(root, show if show == folder else folder)
+        if show != folder:
+            clean_dir = os.path.join(root, show)
+            if os.path.exists(clean_dir):
+                skipped["collision"] += 1
+                log.append(f"SKIP folder collision: {folder} -> {show}")
+                continue
+            os.rename(cur_dir, clean_dir)
+            record(f'mv -n -- "{show}" "{folder}"')
+            log.append(f"RENAME folder: {folder} -> {show}")
+            cur_dir = clean_dir
+        applied += 1
+        base = re.sub(r"\s*\((?:19|20)\d{2}\)$", "", show)
+        for rel_path, season, ep, method, title, ext in eps:
+            if season is None:
+                continue
+            src = os.path.join(cur_dir, rel_path)
+            name = f"{base} - s{season:02d}e{ep:02d}" + (f" - {title}" if title else "") + ext
+            dst = os.path.join(cur_dir, f"Season {season:02d}", name)
+            if os.path.abspath(src) == os.path.abspath(dst):
+                skipped["noop"] += 1
+                continue
+            if os.path.exists(dst):
+                skipped["collision"] += 1
+                log.append(f"  SKIP collision: {rel(dst)}")
+                continue
+            season_dir = os.path.dirname(dst)
+            if not os.path.isdir(season_dir):
+                os.makedirs(season_dir)
+                record(f'rmdir -- "{rel(season_dir)}" 2>/dev/null || true')
+            os.rename(src, dst)
+            record(f'mv -n -- "{rel(dst)}" "{rel(src)}"')
+            moved += 1
+        # prune subfolders we emptied (old "Season 7" etc.); keep the show dir itself
+        for dirpath, _, _ in os.walk(cur_dir, topdown=False):
+            if dirpath == cur_dir:
+                continue
+            try:
+                if not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+                    record(f'mkdir -p -- "{rel(dirpath)}"')
+            except OSError:
+                pass
+
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write(f"normalize_episodes.py --apply  ({date})\nSource: {root}\n\n")
+        fh.write(f"shows changed: {applied} | files moved: {moved} | "
+                 f"skipped: {skipped}\n\n")
+        fh.write("\n".join(log) + "\n")
+    flush_undo()
+    print(f"APPLIED: {applied} shows changed, {moved} episode files moved.")
+    print(f"skipped: {skipped['merge']} merge-group, {skipped['flagged']} flagged, "
+          f"{skipped['collision']} collisions, {skipped['noop']} already-correct")
+    print(f"log:  {log_path}")
+    print(f"undo: {undo_path}")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Preview/plan a Plex TV/anime layout (read-only by default).")
     ap.add_argument("dir")
     ap.add_argument("--out", help="write preview to this file instead of stdout")
-    ap.add_argument("--apply", action="store_true", help="(reserved) apply safe renames; not yet enabled")
+    ap.add_argument("--apply", action="store_true",
+                    help="apply renames for mappable, non-merge shows (logged + reversible)")
     ap.add_argument("--log-dir", help="where logs/undo go on --apply (default: parent of DIR)")
     args = ap.parse_args(argv)
     if not os.path.isdir(args.dir):
         print(f"not a directory: {args.dir}", file=sys.stderr)
         return 2
+    root = os.path.abspath(args.dir)
     if args.apply:
-        print("--apply is intentionally disabled pending review of the preview. "
-              "Generate and inspect the preview first.", file=sys.stderr)
-        return 3
-    report = build_preview(os.path.abspath(args.dir))
+        log_dir = os.path.abspath(args.log_dir) if args.log_dir else os.path.dirname(root)
+        return apply_mappable(root, log_dir, datetime.date.today().isoformat())
+    report = build_preview(root)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(report)
