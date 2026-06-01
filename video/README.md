@@ -9,7 +9,8 @@ movies as `Title (Year)/Title (Year).ext`, and TV/anime as
 | `audit_movies.py` | Read-only report of naming/junk/duplicate/edition issues in a movie library |
 | `normalize_movies.py` | Apply the movie normalization (dry-run by default), with logs + reversible undo |
 | `audit_episodes.py` | Read-only structural + episode-naming report for a TV/anime library |
-| `normalize_episodes.py` | Build a Plex TV/anime layout plan; flags ambiguous cases (preview-only for now) |
+| `normalize_episodes.py` | Build/apply a Plex TV/anime layout; flags ambiguous cases |
+| `map_absolute_episodes.py` | Resolve an absolute-numbered (anime) show via TheTVDB into season/episode |
 
 All tools are read the directory directly, use the standard library only, and (for the
 apply tool) move/rename **within one filesystem**, so changes are atomic renames — no copies.
@@ -71,7 +72,26 @@ Shows split across multiple folders are reported as **merge candidates**.
 python3.11 normalize_episodes.py DIR [--out preview.txt]
 ```
 
-Preview-only for now: `--apply` is intentionally gated until a generated preview has been
-reviewed, because show-name cleaning and episode parsing are heuristic and TV restructuring is
-hard to undo. The intended apply scope (once enabled) is the mappable single-folder shows only;
-merges and flagged shows stay manual.
+`--apply` reorganizes only the mappable, non-merge shows (creating `Season NN/` folders, renaming
+episodes, leaving unparsed files in place), with a log and a reversible undo script rewritten after
+every move. Merges and flagged shows stay manual. Log/undo filenames are namespaced by source
+folder so normalizing two libraries on the same day can't clobber each other's undo.
+
+## map_absolute_episodes.py
+Handles the shows `normalize_episodes.py` flags as **absolute-numbered** (common for anime fansub
+rips like `[Group] Show - 07` or `Show ep 07`). It reads each file's absolute episode number, looks
+the series up on **TheTVDB**, and maps absolute → season/episode, producing authoritative
+`Show (Year)/Season NN/Show - sNNeNN - Title.ext` names (titles come from TheTVDB).
+
+```
+python3.11 map_absolute_episodes.py SHOW_DIR [--name NAME] [--tvdb-id ID] \
+                                    [--offline] [--apply] [--log-dir DIR]
+```
+
+- `--offline` — no network; just shows the absolute number parsed from each filename, so you can
+  sanity-check parsing before spending an API call.
+- Series match uses the cleaned folder name and prefers the TheTVDB result whose year matches the
+  folder; use `--name`/`--tvdb-id` to override, and read the preview before `--apply`.
+
+Requires `FIELDKIT_TVDB_API_KEY` in `.env` (see `example.env`); get a v4 API key at
+https://thetvdb.com/dashboard. `--apply` is logged and reversible like the other tools.
