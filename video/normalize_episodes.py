@@ -314,8 +314,11 @@ def apply_mappable(root, log_dir, date):
     skipped = {"flagged": 0, "merge": 0, "collision": 0, "noop": 0}
 
     os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, f"normalize-episodes-{date}.log")
-    undo_path = os.path.join(log_dir, f"undo-episodes-{date}.sh")
+    # tag log/undo with the source folder so two libraries normalized on the same day
+    # don't overwrite each other's reversal record
+    src_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(root.rstrip("/"))) or "root"
+    log_path = os.path.join(log_dir, f"normalize-episodes-{src_tag}-{date}.log")
+    undo_path = os.path.join(log_dir, f"undo-episodes-{src_tag}-{date}.sh")
 
     def flush_undo():
         # Rewrite the undo script after every change so a partial run is always reversible.
