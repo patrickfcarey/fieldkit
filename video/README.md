@@ -9,6 +9,7 @@ movies as `Title (Year)/Title (Year).ext`, and TV/anime as
 | `audit_movies.py` | Read-only report of naming/junk/duplicate/edition issues in a movie library |
 | `normalize_movies.py` | Apply the movie normalization (dry-run by default), with logs + reversible undo |
 | `audit_episodes.py` | Read-only structural + episode-naming report for a TV/anime library |
+| `normalize_episodes.py` | Build a Plex TV/anime layout plan; flags ambiguous cases (preview-only for now) |
 
 All tools are read the directory directly, use the standard library only, and (for the
 apply tool) move/rename **within one filesystem**, so changes are atomic renames — no copies.
@@ -59,7 +60,18 @@ anything.
 python3.11 audit_episodes.py DIR [DIR ...]
 ```
 
-## Planned
-- `normalize_episodes.py` — restructure shows to `Show (Year)/Season NN/Show - sNNeNN - Title.ext`,
-  merge shows split across multiple folders, and **flag** (not guess) ambiguous cases such as
-  anime absolute-numbering that needs a metadata lookup to map to season/episode.
+## normalize_episodes.py
+Builds a plan to lay out a TV/anime library as `Show (Year)/Season NN/Show - sNNeNN - Title.ext`.
+For each show it cleans the folder name, parses each episode's season/episode number, and
+classifies the show as **mappable** (safe to rename), or flags it as **absolute-numbered**
+(needs a metadata lookup — never guessed), **mixed/unparsed**, or a **miscategorized movie**.
+Shows split across multiple folders are reported as **merge candidates**.
+
+```
+python3.11 normalize_episodes.py DIR [--out preview.txt]
+```
+
+Preview-only for now: `--apply` is intentionally gated until a generated preview has been
+reviewed, because show-name cleaning and episode parsing are heuristic and TV restructuring is
+hard to undo. The intended apply scope (once enabled) is the mappable single-folder shows only;
+merges and flagged shows stay manual.
