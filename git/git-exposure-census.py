@@ -14,6 +14,13 @@ Walks one or more directories, finds every git checkout (including worktrees, wh
     checkouts most "3,000 dirty files" are CRLF flips, not work);
   * untracked files, stashes, submodules, linked worktrees, last commit date.
 
+Linked worktrees are followed wherever they live (a worktree under /tmp is still work
+that exists nowhere else). A checkout whose `git status` cannot answer within
+--timeout is reported UNREAD, and the gate fails on it: "could not look" is never
+reported as "clean". Every git call runs with --no-optional-locks, so a status killed
+on timeout cannot leave an index.lock behind (a 2026-09-21 run on a Windows-mounted
+disk left one in a 5 GB checkout). Checkouts are read in parallel (--jobs).
+
 Output: a one-line-per-repo table on stdout, a TSV via --out, JSON via --json, and a
 summary. Exit status is a GATE: 1 when any repo has commits on no remote, or has no
 pushable remote, unless --no-gate. That makes it usable as a pre-shutdown check or
@@ -39,16 +46,27 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
-def git(repo, *args, timeout=120):
-    """Run a read-only git command; '' on any failure (a repo we cannot read is reported as such, never skipped silently)."""
+def git_raw(repo, *args, timeout=120):
+    """Run a read-only git command; None when git could not answer (error or timeout).
+    --no-optional-locks: `git status` otherwise takes index.lock to refresh the index,
+    and a status killed by the timeout leaves that lock behind for the next user."""
     try:
-        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout)
-        return r.stdout.strip() if r.returncode == 0 else ""
+        r = subprocess.run(["git", "--no-optional-locks", "-C", str(repo), *args],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.stdout if r.returncode == 0 else None
     except Exception:
-        return ""
+        return None
+
+
+def git(repo, *args, timeout=120):
+    """git_raw, stripped; '' on any failure (callers that must tell "no output" from "could not look" use git_raw)."""
+    out = git_raw(repo, *args, timeout=timeout)
+    return out.strip() if out is not None else ""
 
 
 def is_checkout(p: Path) -> bool:
@@ -57,17 +75,25 @@ def is_checkout(p: Path) -> bool:
 
 
 def find_checkouts(roots, max_depth=2):
-    """Checkouts directly under each root (depth 1), plus root itself if it is one.
-    Deliberately shallow: nested repos inside a checkout are that checkout's business."""
+    """Checkouts directly under each root (depth 1), plus root itself if it is one, plus
+    every linked worktree of those, wherever it lives. Deliberately shallow otherwise:
+    nested repos inside a checkout are that checkout's business."""
     seen, out = set(), []
+
+    def add(c):
+        if is_checkout(c) and c.resolve() not in seen:
+            seen.add(c.resolve()); out.append(c)
+
     for root in roots:
         root = Path(os.path.expanduser(root))
         if not root.is_dir():
             continue
-        cands = [root] + sorted(p for p in root.iterdir() if p.is_dir())
-        for c in cands:
-            if is_checkout(c) and c.resolve() not in seen:
-                seen.add(c.resolve()); out.append(c)
+        for c in [root] + sorted(p for p in root.iterdir() if p.is_dir()):
+            add(c)
+    for c in list(out):
+        for ln in git(c, "worktree", "list", "--porcelain").splitlines():
+            if ln.startswith("worktree "):
+                add(Path(ln[len("worktree "):]))
     return out
 
 
@@ -89,7 +115,7 @@ def classify_remote(url: str) -> str:
     return "other"
 
 
-def census_one(repo: Path) -> dict:
+def census_one(repo: Path, timeout=300) -> dict:
     push_remotes = {}
     for ln in git(repo, "remote", "-v").splitlines():
         m = re.match(r"(\S+)\s+(\S+)\s+\((push)\)", ln)
@@ -97,13 +123,24 @@ def census_one(repo: Path) -> dict:
             push_remotes[m.group(1)] = classify_remote(m.group(2))
     pushable = [n for n, c in push_remotes.items() if c in ("github", "ssh-host", "https-host")]
     branch = git(repo, "branch", "--show-current") or "(detached)"
-    dirty_all = [l for l in git(repo, "status", "--porcelain", "--untracked-files=no").splitlines() if l.strip()]
-    ws_stat = git(repo, "diff", "--ignore-all-space", "--ignore-cr-at-eol", "--stat")
-    real_files = 0
-    m = re.search(r"(\d+) files? changed", ws_stat.splitlines()[-1] if ws_stat else "")
-    if m:
-        real_files = int(m.group(1))
-    untracked = sum(1 for l in git(repo, "status", "--porcelain", "--untracked-files=all").splitlines() if l.startswith("??"))
+    # One status walk (the slow part on a big tree), split into tracked edits and untracked files.
+    status = git_raw(repo, "status", "--porcelain", "--untracked-files=all", timeout=timeout)
+    # Real edits = unstaged plus staged, ignoring whitespace and line endings. Plumbing on
+    # purpose: porcelain `git diff` rewrites the index to refresh stat data and ignores
+    # --no-optional-locks (git 2.47, self-test case below); diff-files/diff-index never write it.
+    # --numstat, not --name-only: --name-only skips the content diff, so it ignores -w and
+    # lists CRLF flips and touched-but-identical files as edits.
+    ws = ["--ignore-all-space", "--ignore-cr-at-eol", "--numstat"]
+    unstaged = git_raw(repo, "diff-files", *ws, timeout=timeout)
+    staged = git_raw(repo, "diff-index", "--cached", *ws, "HEAD", timeout=timeout) if git(repo, "rev-parse", "-q", "--verify", "HEAD") else ""
+    unread = status is None or unstaged is None or staged is None
+    if unread:
+        dirty_all, real_files, untracked = None, -1, -1
+    else:
+        lines = [l for l in status.splitlines() if l.strip()]
+        dirty_all = [l for l in lines if not l.startswith("??")]
+        untracked = len(lines) - len(dirty_all)
+        real_files = len({ln.split("\t", 2)[-1] for ln in (unstaged + staged).splitlines() if ln.strip()})
     stashes = len(git(repo, "stash", "list").splitlines())
     noup, ahead = [], []
     for ln in git(repo, "for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads").splitlines():
@@ -123,15 +160,18 @@ def census_one(repo: Path) -> dict:
         "remotes": ",".join(f"{n}:{c}" for n, c in push_remotes.items()) or "NONE",
         "pushable": bool(pushable), "branch": branch,
         "commits_on_no_remote": int(unreach) if unreach.isdigit() else -1,
-        "dirty_files": len(dirty_all), "dirty_real": real_files, "dirty_noise": max(0, len(dirty_all) - real_files),
+        "unread": f"git status did not answer within {timeout}s" if unread else "",
+        "dirty_files": -1 if unread else len(dirty_all), "dirty_real": real_files,
+        "dirty_noise": -1 if unread else max(0, len(dirty_all) - real_files),
         "untracked": untracked, "stashes": stashes,
         "branches_no_upstream": len(noup), "no_upstream_names": " ".join(noup)[:200],
         "ahead": " ".join(ahead)[:200], "submodules": subs, "worktrees": wts, "last_commit": last,
     }
 
 
-def run(roots, out=None, as_json=None, gate=True, quiet=False):
-    rows = [census_one(r) for r in find_checkouts(roots)]
+def run(roots, out=None, as_json=None, gate=True, quiet=False, jobs=8, timeout=300):
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+        rows = list(ex.map(lambda r: census_one(r, timeout=timeout), find_checkouts(roots)))
     if not quiet:
         print(f"{'repo':30s} {'kind':8s} {'remotes':26s} {'branch':22s} unpushed  real/noise  untr  stash  noup  last")
         for r in rows:
@@ -146,17 +186,20 @@ def run(roots, out=None, as_json=None, gate=True, quiet=False):
     exposed = [r for r in rows if r["commits_on_no_remote"] > 0]
     unpushable = [r for r in rows if not r["pushable"]]
     real_dirty = [r for r in rows if r["dirty_real"] > 0]
+    unread = [r for r in rows if r["unread"]]
     total = sum(r["commits_on_no_remote"] for r in rows if r["commits_on_no_remote"] > 0)
     if not quiet:
         print(f"\nSUMMARY: {len(rows)} checkouts | {total} commits on no remote in {len(exposed)} repos | "
               f"{len(unpushable)} with NO pushable remote | {len(real_dirty)} with real uncommitted edits | "
               f"{sum(r['untracked'] for r in rows)} untracked files | {sum(r['stashes'] for r in rows)} stashes | "
               f"{sum(r['branches_no_upstream'] for r in rows)} branches without upstream")
+        for r in unread:
+            print(f"  UNREAD (not clean): {r['path']} — {r['unread']}; rerun with a larger --timeout")
         for r in unpushable:
             print(f"  NO PUSHABLE REMOTE: {r['repo']} ({r['remotes']}) — {r['commits_on_no_remote']} commits exist only here")
         for r in sorted(exposed, key=lambda x: -x["commits_on_no_remote"])[:15]:
             print(f"  EXPOSED: {r['repo']:30s} {r['commits_on_no_remote']:6d} commits on no remote; no-upstream: {r['no_upstream_names'][:80]}")
-    if gate and (exposed or unpushable):
+    if gate and (exposed or unpushable or unread):
         return 1
     return 0
 
@@ -207,6 +250,25 @@ def self_test() -> int:
         case("gate says CLEAN (exit 0) for a root holding only the clean repo",
              run([str(td / "clean")], quiet=True) == 0)
         case("worktree is found as a checkout", is_checkout(clean))
+        wt = td / "elsewhere" / "wt"
+        subprocess.run(["git", "-C", str(clean), "worktree", "add", "-q", "-b", "side", str(wt)], check=True, capture_output=True)
+        found = {c.resolve() for c in find_checkouts([str(clean)])}
+        case("a linked worktree outside every root is found", wt.resolve() in found)
+        slow = census_one(clean, timeout=1e-6)
+        case("a status that cannot answer is UNREAD (-1), never clean", slow["unread"] and slow["dirty_files"] == -1)
+        case("gate fails (exit 1) on an unread checkout", run([str(clean)], quiet=True, timeout=1e-6) == 1)
+        # --no-optional-locks: a plain `git status` rewrites the index to refresh a touched
+        # file's stat data (taking index.lock to do it); the census must not.
+        touched = mk("touched")
+        idx = touched / ".git" / "index"
+        before = idx.stat().st_mtime_ns
+        time.sleep(1.1)
+        (touched / "a.txt").write_text("a\n")                # same bytes, new mtime
+        census_one(touched)
+        case("the census never writes the index (so it can never leave index.lock)", idx.stat().st_mtime_ns == before)
+        (touched / "c.txt").write_text("staged\n")
+        subprocess.run(["git", "-C", str(touched), "add", "c.txt"], check=True)
+        case("a staged edit is counted as real, not noise", census_one(touched)["dirty_real"] == 1)
     print("SELF-TEST", "PASSED" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -227,12 +289,15 @@ def main(argv=None) -> int:
     ap.add_argument("--out", help="write the per-repo TSV here")
     ap.add_argument("--json", help="write the per-repo JSON here")
     ap.add_argument("--no-gate", action="store_true", help="always exit 0 (report only)")
+    ap.add_argument("--jobs", type=int, default=8, help="checkouts read in parallel (default 8)")
+    ap.add_argument("--timeout", type=float, default=300,
+                    help="seconds one git status may take before the checkout is reported UNREAD (default 300)")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
     roots = a.roots or roots_from_env() or [os.getcwd()]
-    return run(roots, out=a.out, as_json=a.json, gate=not a.no_gate)
+    return run(roots, out=a.out, as_json=a.json, gate=not a.no_gate, jobs=a.jobs, timeout=a.timeout)
 
 
 if __name__ == "__main__":
