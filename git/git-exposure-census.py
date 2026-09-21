@@ -115,6 +115,35 @@ def classify_remote(url: str) -> str:
     return "other"
 
 
+def real_edits(repo, numstat_summary: str, staged: bool, timeout=300) -> set:
+    """Paths with a real change in `--numstat --summary` output: lines added or removed, or a
+    create/delete/rename. A path whose only change is its mode is noise. A binary file's
+    numstat is "- -" whether or not its bytes changed, so a binary whose mode flipped is
+    decided by blob hash (HEAD vs index when staged, index vs working file when not)."""
+    mode_changed, paths = set(), {}
+    for ln in numstat_summary.splitlines():
+        m = re.match(r" mode change \d+ => \d+ (.+)$", ln)
+        if m:
+            mode_changed.add(m.group(1))
+        elif "\t" in ln:
+            added, removed, path = ln.split("\t", 2)
+            paths[path] = (added, removed)
+    real = {p for p, ar in paths.items() if p not in mode_changed or ar not in (("0", "0"), ("-", "-"))}
+    binary_flips = sorted(p for p, ar in paths.items() if p in mode_changed and ar == ("-", "-"))
+    if binary_flips:
+        if staged:
+            old = git_raw(repo, "rev-parse", *[f"HEAD:{p}" for p in binary_flips], timeout=timeout)
+            new = git_raw(repo, "rev-parse", *[f":{p}" for p in binary_flips], timeout=timeout)
+        else:
+            old = git_raw(repo, "rev-parse", *[f":{p}" for p in binary_flips], timeout=timeout)
+            new = git_raw(repo, "hash-object", "--", *binary_flips, timeout=timeout)
+        if old is None or new is None:
+            real.update(binary_flips)                     # cannot compare: count it, never hide it
+        else:
+            real.update(p for p, o, n in zip(binary_flips, old.split(), new.split()) if o != n)
+    return real
+
+
 def census_one(repo: Path, timeout=300) -> dict:
     push_remotes = {}
     for ln in git(repo, "remote", "-v").splitlines():
@@ -130,7 +159,9 @@ def census_one(repo: Path, timeout=300) -> dict:
     # --no-optional-locks (git 2.47, self-test case below); diff-files/diff-index never write it.
     # --numstat, not --name-only: --name-only skips the content diff, so it ignores -w and
     # lists CRLF flips and touched-but-identical files as edits.
-    ws = ["--ignore-all-space", "--ignore-cr-at-eol", "--numstat"]
+    # --summary names mode-only changes (a 755/644 flip on a Windows mount: "0 0" in numstat),
+    # which are noise like CRLF flips.
+    ws = ["--ignore-all-space", "--ignore-cr-at-eol", "--numstat", "--summary"]
     unstaged = git_raw(repo, "diff-files", *ws, timeout=timeout)
     staged = git_raw(repo, "diff-index", "--cached", *ws, "HEAD", timeout=timeout) if git(repo, "rev-parse", "-q", "--verify", "HEAD") else ""
     unread = status is None or unstaged is None or staged is None
@@ -140,7 +171,7 @@ def census_one(repo: Path, timeout=300) -> dict:
         lines = [l for l in status.splitlines() if l.strip()]
         dirty_all = [l for l in lines if not l.startswith("??")]
         untracked = len(lines) - len(dirty_all)
-        real_files = len({ln.split("\t", 2)[-1] for ln in (unstaged + staged).splitlines() if ln.strip()})
+        real_files = len(real_edits(repo, unstaged, False, timeout) | real_edits(repo, staged, True, timeout))
     stashes = len(git(repo, "stash", "list").splitlines())
     noup, ahead = [], []
     for ln in git(repo, "for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads").splitlines():
@@ -160,7 +191,7 @@ def census_one(repo: Path, timeout=300) -> dict:
         "remotes": ",".join(f"{n}:{c}" for n, c in push_remotes.items()) or "NONE",
         "pushable": bool(pushable), "branch": branch,
         "commits_on_no_remote": int(unreach) if unreach.isdigit() else -1,
-        "unread": f"git status did not answer within {timeout}s" if unread else "",
+        "unread": f"git status failed, or took longer than {timeout}s" if unread else "",
         "dirty_files": -1 if unread else len(dirty_all), "dirty_real": real_files,
         "dirty_noise": -1 if unread else max(0, len(dirty_all) - real_files),
         "untracked": untracked, "stashes": stashes,
@@ -269,6 +300,23 @@ def self_test() -> int:
         (touched / "c.txt").write_text("staged\n")
         subprocess.run(["git", "-C", str(touched), "add", "c.txt"], check=True)
         case("a staged edit is counted as real, not noise", census_one(touched)["dirty_real"] == 1)
+        flipped = mk("flipped")
+        (flipped / "a.txt").chmod(0o755)                        # mode-only change
+        r = census_one(flipped)
+        case("a mode-only flip is noise, not a real edit", r["dirty_files"] == 1 and r["dirty_real"] == 0)
+        (flipped / "empty.txt").write_text("")
+        subprocess.run(["git", "-C", str(flipped), "add", "empty.txt"], check=True)
+        case("a new empty file (also 0 0 in numstat) is still real", census_one(flipped)["dirty_real"] == 1)
+        binrepo = mk("binary")
+        (binrepo / "b.bin").write_bytes(b"\x00\x01\x02")
+        subprocess.run(["git", "-C", str(binrepo), "add", "b.bin"], check=True)
+        subprocess.run(["git", "-C", str(binrepo), "commit", "-q", "-m", "bin"], check=True, env=env)
+        (binrepo / "b.bin").chmod(0o755)
+        case("a binary whose only change is its mode is noise", census_one(binrepo)["dirty_real"] == 0)
+        (binrepo / "b.bin").write_bytes(b"\x00\x09\x02")
+        case("a binary with new bytes AND a mode flip is real", census_one(binrepo)["dirty_real"] == 1)
+        subprocess.run(["git", "-C", str(binrepo), "add", "b.bin"], check=True)
+        case("the same, staged, is real", census_one(binrepo)["dirty_real"] == 1)
     print("SELF-TEST", "PASSED" if ok else "FAILED")
     return 0 if ok else 1
 
