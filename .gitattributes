@@ -1,0 +1,2 @@
+# Both branches' worker-log entries survive a merge, because entries are only ever appended.
+worker_log.md merge=union

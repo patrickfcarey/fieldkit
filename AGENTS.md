@@ -46,6 +46,26 @@ product names, credentials, or research strings in any tracked file.
 
 ---
 
+## The worker log and the handoff
+
+Two files at the repo root, and **agents maintain both**:
+
+- [`worker_log.md`](worker_log.md) is the running history, one entry per piece of agent work,
+  **append-only**. The heading and the **Starting** line go in *before* the first file change or
+  the first investigative command; Did / Checked / Found / Next go in *after*. A check that did
+  not run is logged as not run. Committed on the same branch as the work. It merges with git's
+  `union` driver (`.gitattributes`), so never rewrite or delete an entry; correct one with a new
+  entry that points back.
+- [`handoff.md`](handoff.md) is the current state. **Rewrite it before you stop**: its RESUME HERE
+  block names the branch, the tip, what is waiting on the owner, and the exact command if there is
+  one.
+
+No attribution lines in either. Both are tracked files in a public repo, so the rule above
+applies to them too: no LAN addresses, host names, machine paths, private product names or
+credentials.
+
+---
+
 ## What's here
 
 - [`README.md`](README.md) — philosophy, structure, headers, tests,
@@ -53,6 +73,7 @@ product names, credentials, or research strings in any tracked file.
 - `git/git-exposure-census.py` — read-only census of checkouts that
   exist on this machine and nowhere else. Self-tested.
 - `example.env` — template for `.env`.
+- `worker_log.md`, `handoff.md` — the agent history and the current state (above).
 
 ---
 
