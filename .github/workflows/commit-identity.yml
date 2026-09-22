@@ -1,0 +1,57 @@
+# The fleet commit-identity rule, enforced where a local git hook cannot reach.
+#
+# CANONICAL SOURCE: retro-vr-framework/experiments/fleet-hooks/identity/commit-identity.yml
+# Vendored byte-identically into each repo as .github/workflows/commit-identity.yml
+# by vendor-ci.sh, together with the two scripts it runs. Edit it THERE, not here.
+#
+# WHY. The `commit-msg` hook installed fleet-wide on 2026-09-04 only runs on the
+# dev box. docs/45-incidents-framework-apps.md measures that 11 of the 15
+# identity violations were committed OFF that machine -- 7 of them by a cloud
+# runner on a `claude/*` branch in loadout-pipeline-profiles -- and
+# `git commit --no-verify` bypasses the hook even locally. This job sits on
+# GitHub's side of the wire, where neither escape exists.
+#
+# It runs on EVERY branch, not just the default one, because the seven
+# cloud-runner commits never touched the default branch: they sat on a
+# `claude/*` branch, which is precisely where a branch filter would have
+# missed them.
+#
+# THIS IS A CONTROL AND IT FAILS CLOSED. Step 1 runs the predicate's own case
+# table, so a job that goes green has PROVEN it can go red -- H-11, "never
+# report a check that could not have failed". Step 2 exits non-zero if it
+# cannot even determine which commits to check.
+
+name: commit-identity
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-identity:
+    name: no commit attributed to Claude
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the base..head range must resolve, and a shallow
+          # clone would silently shrink the set of commits checked.
+          fetch-depth: 0
+
+      - name: The guard's own tests must pass before it is trusted
+        run: python3 .github/scripts/check-commit-identity.py --self-test
+
+      - name: The vendored predicate is the commit-msg hook, unmodified
+        run: python3 .github/scripts/check-commit-identity.py --verify-vendor
+
+      - name: Every commit in this push / pull request
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 .github/scripts/check-commit-identity.py --ci
