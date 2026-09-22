@@ -12,6 +12,18 @@ python3 git/git-exposure-census.py /path/to/repos ~/worktrees --out census.tsv
 python3 git/git-exposure-census.py --self-test
 ```
 
-Slow on Windows-mounted (`/mnt/c`) checkouts with large histories: `git rev-list` over
-a multi-GB `.git` on NTFS through WSL takes minutes per repo. Run it from a timer, not
-interactively, or point it at one root at a time.
+Checkouts are read in parallel (`--jobs`, default 8), and linked worktrees are followed
+wherever they live. The slow part on a Windows-mounted (`/mnt/c`) checkout is the
+working-tree walk of `git status`, which can take many minutes on a large tree. A
+checkout whose status fails, or takes longer than `--timeout` seconds (default 300), is
+reported **UNREAD** and fails the gate: "could not look" is never reported as "clean".
+
+It never writes to a checkout: every git call runs with `--no-optional-locks`, and real
+edits come from plumbing (`diff-files`, `diff-index --cached`), because porcelain
+`git diff` rewrites the index even under that flag. So a run killed halfway cannot leave
+an `index.lock` behind. Line-ending flips and mode-only changes (a 755/644 flip) count as
+noise, not edits.
+
+It counts remote-tracking refs only. A branch a mirror holds under another namespace
+(`refs/hosts/<prefix>/`, `refs/wip/`) still reads as "on no remote"; look at the mirror
+before calling it lost.
