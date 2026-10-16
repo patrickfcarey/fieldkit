@@ -139,3 +139,22 @@ not its path.
 - **Found:** a line like `a | b` over `---` is a heading underline in GitHub-flavored Markdown,
   not a table; the tool requires equal header and delimiter cell counts, as GitHub does.
 - **Next / needs:** the owner merges `dm4800/fix-tables` into `main` (command in `handoff.md`).
+
+## 2026-10-16 — dm4800/merge-dev — bring dev (music, video, optical tools) into main
+- **Starting:** the owner asked to merge `dev` into `main`. `dev` holds 12 commits from
+  2026-05-17 to 2026-06-01 (`music/`, `video/`, `optical/` domains) that never reached `main`.
+  Three carried a Claude co-author trailer and ten an identity from the machine they were made
+  on, so on the owner's choice they were rebuilt first as branch `dm4800/dev-clean`: Patrick
+  Carey as author and committer, trailers removed, messages and author dates kept, tree
+  byte-identical to `origin/dev`. `origin/dev` itself is untouched.
+
+## 2026-10-16 — dm4800/merge-dev — dev merged into main
+- **Did:** merged `dm4800/dev-clean` into `main` on branch `dm4800/merge-dev`. Conflicts:
+  `.gitignore` takes `dev`'s (a superset of `main`'s); `example.env` takes `dev`'s template plus a
+  `git/` section for `GIT_CENSUS_ROOTS`. `README.md` merged on its own (`dev` adds "Scope" and
+  "Language Baselines"). Listed the three domains in `AGENTS.md`; rewrote `handoff.md`.
+- **Checked:** every rebuilt commit is Patrick Carey / Patrick Carey with no trailer; the rebuilt
+  tree equals `origin/dev`. Under Python 3.11: `optical/tests` 16/16, `music/tests` 14/14,
+  `markdown/tests` 5/5. Not run: `music/tests/run_target_test.py` (needs a real library).
+- **Next / needs:** owner decides whether to delete `origin/dev` (old commits); merged work
+  branches can go.

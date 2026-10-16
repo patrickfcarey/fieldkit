@@ -54,6 +54,28 @@ Every tool must be understandable, debuggable, and maintainable under pressure.
 
 ---
 
+## Scope
+
+Tools in fieldkit are **generic and reusable**. A script here works
+against any input of its kind -- any directory, any file, any host --
+never against one specific machine.
+
+Anything bound to a single named system belongs with that system's
+records, not in fieldkit:
+
+* A particular machine's backup script, or a particular device's
+  content loadout, is part of *that system's* provisioning and
+  recovery. It lives with that system, in the infrastructure
+  repository that tracks it.
+* fieldkit holds the generic engine such a script calls -- the
+  reusable transcoder, the reusable backup mechanism -- never the
+  per-system configuration that drives it.
+
+Rule of thumb: if renaming or removing one machine would make the
+script meaningless, it is system-specific and does not belong here.
+
+---
+
 ## Repository Structure
 
 The repository is organized by **domain**, not by language.
@@ -188,6 +210,21 @@ All scripts must document their runtime environment.
 * Do not guess compatibility beyond reasonable assumptions
 * Keep entries concise and accurate
 * Update when behavior changes due to environment differences
+
+---
+
+## Language Baselines
+
+Default language versions for tools in this repository:
+
+* **Python:** tools target **Python 3.11+**. Write for 3.11; do not
+  rely on features newer than the minimum. A tool that genuinely
+  needs a newer version must state it in its header `Dependencies`
+  block and explain why.
+
+Keep code parseable on older interpreters where practical, so a
+runtime version check can fail with a clear message instead of a
+raw `SyntaxError`.
 
 ---
 

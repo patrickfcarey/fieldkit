@@ -7,32 +7,32 @@ Where fieldkit stands and what to do next. **Rewritten, not appended**: the runn
 
 ## RESUME HERE (2026-10-16)
 
-**Branch `dm4800/fix-tables`, one commit over `main` (`abcfe55`), pushed to `origin` and the
-private mirror.** It adds `markdown/fix_tables.py`, the tool `README.md` has always used as its
-example and that was never written, plus `markdown/README.md`, `markdown/docs/fix_tables.md` and
-`markdown/tests/test_fix_tables.py`.
+**`main` holds everything.** On the owner's word, `dev` (the `music/`, `video/` and `optical/`
+tools, 12 commits from 2026-05-17 to 2026-06-01) was merged into `main` by a merge commit on branch
+`dm4800/merge-dev`, then `main` was fast-forwarded to it and pushed to `origin` and the private
+mirror.
 
-Waiting on the owner: merging the branch into `main` (the agent does not merge `main` unasked).
+Before the merge, `dev`'s commits were rebuilt as `dm4800/dev-clean` (owner's choice): Patrick Carey
+as author and committer, the three Claude co-author trailers removed, messages and author dates
+kept, tree byte-identical to `origin/dev`.
 
-```
-git switch main && git merge --ff-only dm4800/fix-tables && git push origin main
-```
-
-To check it first:
-
-```
-python3 markdown/fix_tables.py --self-test                 # 11 of 11
-python3 -m unittest discover -s markdown/tests             # 5 tests, OK
-```
+Waiting on the owner:
+- **`origin/dev` still holds the old commits** (trailers and the machine identity). Its content is
+  all in `main` now. Deleting it, or leaving it as a record, is the owner's call:
+  `git push origin --delete dev`
+- The branches `dm4800/fix-tables`, `dm4800/dev-clean` and `dm4800/merge-dev` are merged and can be
+  deleted.
 
 ## State (OBSERVED 2026-10-16)
 
-- **Two tools:**
+- **Tools on `main`:**
   - `git/git-exposure-census.py`: `--self-test` 18/18 when last run (2026-09-21).
-  - `markdown/fix_tables.py`: `--self-test` 11/11. A copy with padding disabled fails 9 of 11.
-    Run over a 1,685-line Markdown index (990 table rows), it changed no cell's text, and a second
-    run changed nothing.
-- **PR #1** (`dm4800/census-and-worker-log`, the census and the worker log) is merged into `main`.
+  - `markdown/fix_tables.py`: `--self-test` 11/11; unit tests 5/5.
+  - `music/`, `video/`, `optical/`: unit tests `optical/tests` 16/16 and `music/tests` 14/14 under
+    Python 3.11 at the merge. `music/tests/run_target_test.py` runs against a real library and was
+    not run.
+- **Merge conflicts resolved:** `.gitignore` takes `dev`'s (a superset of `main`'s one line);
+  `example.env` takes `dev`'s template plus a `git/` section with `GIT_CENSUS_ROOTS`.
 - **Remotes:** `origin` is the GitHub repo. `upstream` is the same repo with its push URL blocked,
   so the hand-off tool has an `upstream/main` to count against. `nas` is the private mirror.
 - **Working tree noise:** on a Windows-mounted checkout, `LICENSE` and `README.md` show modified.
@@ -43,13 +43,12 @@ python3 -m unittest discover -s markdown/tests             # 5 tests, OK
 
 - Commit identity: Patrick Carey `<patrickfcarey@gmail.com>` as author AND committer, no attribution
   lines (`AGENTS.md` rule 1).
-- Machine-specific values (census roots) go in `.env`, never in a tracked file (`example.env` is the
-  template).
+- Machine-specific values go in `.env`, never in a tracked file (`example.env` is the template).
 
 ## Do not
 
 - Do not merge or push `main` without the owner's word. Work branches may be pushed to `origin`
-  (the owner's rule since 2026-09-27; it replaced the older "never push to origin" line here).
+  (the owner's rule since 2026-09-27).
 - Do not put a LAN address, host name, machine path, private product or repository name, or
   credential in any tracked file, this one included.
 - Do not use porcelain `git diff` or plain `git status` in a tool that audits other checkouts. Both
@@ -64,3 +63,5 @@ python3 -m unittest discover -s markdown/tests             # 5 tests, OK
 - A submodule whose `.git` file names a Windows absolute path makes `git status` fail under WSL. The
   census reports that checkout as UNREAD, which is correct. Its message cannot say which submodule.
 - `fix_tables.py` leaves blockquoted tables (`> | a |`) alone; see its docs for the other limits.
+- `fix_tables.py` targets Python 3.9+, below the README's 3.11 baseline that arrived with `dev`;
+  that is allowed (it relies on nothing newer than its stated minimum).

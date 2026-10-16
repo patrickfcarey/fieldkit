@@ -75,6 +75,13 @@ credentials.
 - `markdown/fix_tables.py` — lines up the pipe tables in Markdown files
   (padded cells, even rows, optional bold headers). Self-tested; unit
   tests in `markdown/tests/`.
+- `music/` — audit and fill audio tags, embed cover art, write M3U
+  playlists (`audit_tags.py`, `tag_music.py`, `gen_playlists.py`).
+  See `music/README.md`.
+- `video/` — audit and normalize movie and TV/anime library layouts.
+  See `video/README.md`.
+- `optical/` — author DVD and Blu-ray ISO images. See
+  `optical/README.md`.
 - `example.env` — template for `.env`.
 - `worker_log.md`, `handoff.md` — the agent history and the current state (above).
 
