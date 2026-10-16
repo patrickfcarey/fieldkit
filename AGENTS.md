@@ -72,6 +72,9 @@ credentials.
   docs, Docker policy, rejection criteria. Read it.
 - `git/git-exposure-census.py` — read-only census of checkouts that
   exist on this machine and nowhere else. Self-tested.
+- `markdown/fix_tables.py` — lines up the pipe tables in Markdown files
+  (padded cells, even rows, optional bold headers). Self-tested; unit
+  tests in `markdown/tests/`.
 - `example.env` — template for `.env`.
 - `worker_log.md`, `handoff.md` — the agent history and the current state (above).
 

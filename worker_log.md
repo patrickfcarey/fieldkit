@@ -115,3 +115,27 @@ not its path.
   paths. The publish command in `handoff.md` has placeholders for the checkout and body file for the
   same reason.
 - **Next / needs:** the owner publishes the branch (command in `handoff.md`).
+
+## 2026-10-16 — dm4800/fix-tables — write markdown/fix_tables.py (the README's own example tool)
+- **Starting:** the owner asked for "the script we wrote back in the day" that formats Markdown
+  tables (even rows, padded header row, pipes, bold headers). Searched first (AGENTS.md rule 4):
+  no such file on any branch of this repo (`git log --all --name-only`), nor in the other
+  checkouts on the development machine. The only trace is README.md, which uses
+  `markdown/fix_tables.py` as its worked example of a script header, so the tool was planned and
+  never written. Writing it now under that name, with its README, docs and tests.
+
+## 2026-10-16 — dm4800/fix-tables — fix_tables.py written and checked
+- **Did:** wrote `markdown/fix_tables.py` (standard library, Python 3.9+): pads every cell to its
+  column's width, puts a pipe at both ends of every row, gives every row the same cell count,
+  redraws the delimiter row keeping its alignment colons, and with `--bold-headers` wraps header
+  cells in `**...**`. Modes: print, `--in-place`, `--check` (exit 1 if a file would change),
+  stdin. Added `markdown/README.md`, `markdown/docs/fix_tables.md`,
+  `markdown/tests/test_fix_tables.py`, and a line in `AGENTS.md`. Rewrote `handoff.md`.
+- **Checked:** `--self-test` 11/11; a copy with padding disabled fails 9 of 11 (the checks can go
+  red). Unit tests: 5 run, OK (`--check`, `--in-place` with CRLF kept, a missing file exits 2).
+  On a 1,685-line Markdown index with 990 table rows: every row's cells parse identically before
+  and after, and a second run changes nothing. The tool found its own README's table misaligned;
+  fixed with `--in-place`.
+- **Found:** a line like `a | b` over `---` is a heading underline in GitHub-flavored Markdown,
+  not a table; the tool requires equal header and delimiter cell counts, as GitHub does.
+- **Next / needs:** the owner merges `dm4800/fix-tables` into `main` (command in `handoff.md`).
